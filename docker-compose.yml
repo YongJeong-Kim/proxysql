@@ -1,0 +1,55 @@
+version: '3.8'
+
+services:
+  master:
+    image: mysql
+    container_name: master
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+    restart: always
+    ports:
+      - 13306:3306
+
+  slave1:
+    image: mysql
+    container_name: slave1
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+    restart: always
+    ports:
+      - 23306:3306
+    depends_on:
+      - master
+
+  slave2:
+    image: mysql
+    container_name: slave2
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+    restart: always
+    ports:
+      - 33306:3306
+    depends_on:
+      - master
+
+  slave3:
+    image: mysql
+    container_name: slave3
+    environment:
+      MYSQL_ROOT_PASSWORD: 1234
+    restart: always
+    ports:
+      - 43306:3306
+    depends_on:
+      - master
+
+  proxy:
+    image: proxysql/proxysql
+    container_name: proxy
+    restart: always
+    ports:
+      - 16032:6032
+      - 16033:6033
+      - 16070:6070
+    volumes:
+      - ./proxysql.cnf:/etc/proxysql.cnf proxysql/proxysql
