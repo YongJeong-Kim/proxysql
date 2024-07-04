@@ -42,9 +42,9 @@ Empty set (0.000 sec)
 add server 
 ```bash 
 # proxysql
-MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname) VALUES (0, 'master');
-MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname) VALUES (1, 'slave1');
-MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname) VALUES (1, 'slave2'); 
+MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (0, 'master', 3306);
+MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (1, 'slave1', 3306);
+MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (1, 'slave2', 3306); 
 ```
 
 show server list
@@ -60,23 +60,27 @@ MySQL [admin]> SELECT * FROM mysql_servers;
 3 rows in set (0.000 sec)
 ```
 
-변경내용 적용하기
-```bash 
-# 메모리에 있는 변경내역 불러오기
-MySQL [admin]> LOAD MYSQL SERVERS TO RUNTIME;
-
-# 불러온 변경내역 저장
-MySQL [admin]> SAVE MYSQL SERVERS TO DISK;
-```
 ```bash
+# proxysql
+# 메모리에 있는 변경내역 불러오기
 MySQL [admin]> LOAD MYSQL SERVERS TO RUNTIME;
 Query OK, 0 rows affected (0.002 sec)
 
+# 불러온 변경내역 저장
 MySQL [admin]> SAVE MYSQL SERVERS TO DISK;
 Query OK, 0 rows affected (0.030 sec)
 ```
 
+proxysql 사용자 변경하기
 proxysql.cnf에 설정한 `monitor_username="monitor"`, `monitor_password="monitor"`
+```bash 
+# proxysql
+MySQL [admin]> UPDATE global_variables SET variable_value = 'puser' WHERE variable_name = 'mysql-monitor_username';
+MySQL [admin]> UPDATE global_variables SET variable_value = '1234' WHERE variable_name = 'mysql-monitor_password';
+MySQL [admin]> LOAD MYSQL VARIABLES TO RUNTIME;
+MySQL [admin]> SAVE MYSQL VARIABLES TO DISK;
+```
+
 모니터링 계정을 생성하여 서버 상태를 체크할 수 있다.
 ```bash 
 # master
@@ -142,10 +146,10 @@ mysql> select * from mysql.general_log;
 ```bash 
 # master 
 mysql> SELECT host, user, authentication_string FROM mysql.user;
-+-----------+------------------+------------------------------------------------------------------------+
++-----------+------------------+----[README.md](..%2Freplication%2FREADME.md)--------------------------------------------------------------------+
 | host      | user             | authentication_string                                                  |
 +-----------+------------------+------------------------------------------------------------------------+
-| %         | monitor          | $A$005$+1[cGAq0\GY
+| %         | monitor          | $A$005$+[README.md](..%2Freplication%2FREADME.md)1[cGAq0\GY
                                                    W)5JIQDFF8UWYIutAbW/BGEbYahXhJdnnyg0tcb3sEJqNoL15 |
 | %         | root             | $A$005$u_\VVSOls<r>1<m{wZu6XyMZ7Acqq9Rs910foFplP1Zxiyf9.R0GIghHAh7 |
 | %         | testuser         | *A4B6157319038724E3560894F7F932C8886EBFCF                              |
@@ -163,22 +167,67 @@ mysql> SELECT host, user, authentication_string FROM mysql.user;
 # proxysql
 MySQL [admin]> SELECT * FROM mysql_users;
 Empty set (0.000 sec)
-
+INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('ubuntu', '123456', 0);
 MySQL [admin]> INSERT INTO mysql_users(username, password) VALUES ('testuser', '*A4B6157319038724E3560894F7F932C8886EBFCF');
 Query OK, 1 row affected (0.000 sec)
 
-MySQL [admin]> LOAD MYSQL SERVERS TO RUNTIME;
+MySQL [admin]> LOAD MYSQL USERS TO RUNTIME;
 Query OK, 0 rows affected (0.002 sec)
 
-MySQL [admin]> SAVE MYSQL SERVERS TO DISK;
+MySQL [admin]> SAVE MYSQL USERS TO DISK;
 Query OK, 0 rows affected (0.030 sec)
 ```
 
-connect client
+connect client to proxysql
 ```bash
-# master
-$ docker compose exec -it master mysql -u testuser -p -P 16033 -h localhost
+$ docker compose exec -it master mysql -u puser -p -P 6033 -h proxy
 ```
+
+proxysql client 접속할 때 Access Denied 발생한다면
+```bash 
+# proxysql
+MySQL [admin]> select * from global_variables where variable_name like '%default_authentication_plugin%';
++-------------------------------------+-----------------------+
+| variable_name                       | variable_value        |
++-------------------------------------+-----------------------+
+| mysql-default_authentication_plugin | mysql_native_password |
++-------------------------------------+-----------------------+
+1 row in set (0.001 sec)
+```
+variable_value가 `mysql_native_password`로 되어 있는 것을 확인한다.
+
+생성한 유저(puser)의 plugin이 `mysql_native_password`인지 확인하자
+처음 생성 시에는 `caching_sha2_password`로 되어 있을 것이다. (MySQL 8+)
+```bash 
+# master
+mysql> select host, user, plugin from mysql.user;
++-----------+------------------+-----------------------+
+| host      | user             | plugin                |
++-----------+------------------+-----------------------+
+| %         | monitor          | caching_sha2_password |
+| %         | puser            | mysql_native_password |
+| %         | root             | caching_sha2_password |
+| %         | testuser         | mysql_native_password |
+| localhost | mysql.infoschema | caching_sha2_password |
+| localhost | mysql.session    | caching_sha2_password |
+| localhost | mysql.sys        | caching_sha2_password |
+| localhost | root             | caching_sha2_password |
++-----------+------------------+-----------------------+
+8 rows in set (0.00 sec)
+```
+
+plugin 수정하기
+```bash 
+# master 
+mysql> alter user 'puser'@'%' identified with mysql_native_password by '1234';
+mysql> grant all on *.* to 'puser'@'%';
+mysql> flush privileges;
+```
+reconnect client to proxysql
+```bash
+$ docker compose exec -it master mysql -u puser -p -P 6033 -h proxy -e 'select @@hostname';
+```
+
 
 ### query rules
 #### 현재 query rule 확인하기 
@@ -197,16 +246,16 @@ MySQL [admin]> INSERT INTO mysql_query_rules(match_pattern,destination_hostgroup
 MySQL [admin]> INSERT INTO mysql_query_rules(match_pattern,destination_hostgroup,active) VALUES ('^DELETE',0,1);
 MySQL [admin]> INSERT INTO mysql_query_rules(match_pattern,destination_hostgroup,active) VALUES ('^SELECT',1,1);
 
-MySQL [admin]> LOAD MYSQL SERVERS TO RUNTIME;
+MySQL [admin]> LOAD MYSQL QUERY RULES TO RUNTIME;
 Query OK, 0 rows affected (0.002 sec)
 
-MySQL [admin]> SAVE MYSQL SERVERS TO DISK;
+MySQL [admin]> SAVE MYSQL QUERY RULES TO DISK;
 Query OK, 0 rows affected (0.030 sec)
 ```
 
 master general log
 ```bash 
-# master
+# master log_output -> FILE
 mysql> show variables like '%general%';
 +------------------+---------------------------------+
 | Variable_name    | Value                           |
