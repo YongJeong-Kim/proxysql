@@ -206,10 +206,33 @@ Query OK, 0 rows affected (0.030 sec)
 
 master general log
 ```bash 
+# master
+mysql> show variables like '%general%';
++------------------+---------------------------------+
+| Variable_name    | Value                           |
++------------------+---------------------------------+
+| general_log      | ON                              |
+| general_log_file | /var/lib/mysql/f83b85cbf27c.log |
++------------------+---------------------------------+
+2 rows in set (0.00 sec)
 
+$ docker compose exec -it master bash
+bash-4.4# tail -f /var/lib/mysql/f83b85cbf27c.log
 ```
 
 slave general log
 ```bash 
 
+```
+
+backup config
+```bash
+# proxysql  
+MySQL [admin]> SELECT CONFIG INTO OUTFILE /tmp/backup.cfg;
+MySQL [admin]> SAVE CONFIG TO FILE  /tmp/backup.cfg;
+```
+
+show config
+```bash
+MySQL [admin]> SELECT CONFIG FILE;
 ```
