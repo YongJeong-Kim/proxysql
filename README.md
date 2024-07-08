@@ -7,8 +7,21 @@ $ docker compose cp ./slave/my2.cnf slave2:/etc/my.cnf
 $ docker compose cp ./slave/my3.cnf slave3:/etc/my.cnf
 ```
 
+create replication user
+```bash 
+$ docker compose exec master mysql -u root -p
+
+# master
+mysql> create user 'testuser'@'%' identified by '1234';
+# authentication plugin default caching_sha2_password(mysql 8+)
+mysql> alter user 'testuser'@'%' identified with mysql_native_password by '1234';
+mysql> grant replication slave on *.* to 'testuser'@'%';
+mysql> flush privileges;
+```
+
 ```bash 
 # all slaves
+# if user using plugin caching_sha2_password, SSL or RSA required
 mysql> change master to MASTER_HOST='master', MASTER_USER='testuser', MASTER_PASSWORD='1234', MASTER_LOG_FILE='mysql-bin.000003', MASTER_LOG_POS=1153;
 ```
 포트 번호를 별도로 설정하려면 다음과 같은 옵션을 사용한다.
@@ -24,7 +37,7 @@ mysql> show slave status\G
 
 connect proxysql admin
 ```bash
-$ docker exec -it proxy bash
+$ docker compose exec -it proxy bash
 $ mysql -u admin -P 6032
 ```
 OR
@@ -82,10 +95,13 @@ MySQL [admin]> LOAD MYSQL VARIABLES TO RUNTIME;
 MySQL [admin]> SAVE MYSQL VARIABLES TO DISK;
 ```
 
-모니터링 계정을 생성하여 서버 상태를 체크할 수 있다.
+create proxysql client
 ```bash 
 # master
 mysql> create user 'puser'@'%' identified by '1234';
+# no need alter user mysql_native_password
+mysql> grant all on *.* to 'puser'@'%';
+mysql> flush privileges;
 ```
 
 general log 설정
@@ -143,26 +159,6 @@ mysql> select * from mysql.general_log;
 5 rows in set (0.00 sec)
 ```
 
-클라이언트(웹서버 등)에서 proxysql로 접속하기 위한 유저 등록하기 
-```bash 
-# master 
-mysql> select host, user, plugin, authentication_string from mysql.user;
-+-----------+------------------+-----------------------+------------------------------------------------------------------------+
-| host      | user             | plugin                | authentication_string                                                  |
-+-----------+------------------+-----------------------+------------------------------------------------------------------------+
-| %         | puser            | caching_sha2_password | $A$005$+SW=/ZYsUK!?
-                                                                            >xVpv/2V2CVqlydcaJC1WPQQ2qoBsUXWZ9K1ORuGMrR9I0 |
-| %         | root             | caching_sha2_password | $A$005$Hf/c:fuu{U      *%je    iPILX4pAe5VBQHJxqLYcLlulZn6Awxr/sV2Q3Ua8GzOXfB |
-| %         | testuser         | mysql_native_password | *A4B6157319038724E3560894F7F932C8886EBFCF                              |
-| localhost | mysql.infoschema | caching_sha2_password | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
-| localhost | mysql.session    | caching_sha2_password | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
-| localhost | mysql.sys        | caching_sha2_password | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
-| localhost | root             | caching_sha2_password | $A$005$GkZ
-%Fo%6JOscbmNcK1fWpKS4Xf2n4GJlhRHBConhPEzTa8ZRN7 |                 &=sV
-+-----------+------------------+-----------------------+------------------------------------------------------------------------+
-7 rows in set (0.00 sec)
-```
-
 만들었던 puser를(수정했던 monitor 유저) 등록한다.
 ```bash 
 # proxysql
@@ -170,7 +166,7 @@ MySQL [admin]> SELECT * FROM mysql_users;
 Empty set (0.000 sec)
 # 만약 select host, user, plugin, authentication_string from mysql.user;
 # 에서 plugin 값이 caching_sha2_password 이라면 password 컬럼에 password 그대로 입력하자
-# MySQL [admin]> INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('puser', '1234', 0);
+MySQL [admin]> INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('puser', '1234', 0);
 
 # mysql_native_password 이라면 password 컬럼에 authentication_string 값을 입력하자
 MySQL [admin]> INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('puser', '*A4B6157319038724E3560894F7F932C8886EBFCF', 0);
@@ -183,63 +179,15 @@ MySQL [admin]> SAVE MYSQL USERS TO DISK;
 Query OK, 0 rows affected (0.030 sec)
 ```
 
-새로운(puser) 유저 권한부여
-```bash 
-# master
-mysql> grant all on *.* to 'puser'@'%';
-mysql> flush privileges;
-```
-
-connect client to proxysql
+##### connect client to proxysql
 ```bash
 $ docker compose exec -it master mysql -u puser -p -P 6033 -h proxy
 ```
 
-proxysql client 접속할 때 Access Denied 발생한다면
-```bash 
-# proxysql
-MySQL [admin]> select * from global_variables where variable_name like '%default_authentication_plugin%';
-+-------------------------------------+-----------------------+
-| variable_name                       | variable_value        |
-+-------------------------------------+-----------------------+
-| mysql-default_authentication_plugin | mysql_native_password |
-+-------------------------------------+-----------------------+
-1 row in set (0.001 sec)
-```
-variable_value가 `mysql_native_password`로 되어 있는 것을 확인한다.
-
-생성한 유저(puser)의 plugin이 `mysql_native_password`인지 확인하자
-처음 생성 시에는 `caching_sha2_password`로 되어 있을 것이다. (MySQL 8+)
-```bash 
-# master
-mysql> select host, user, plugin from mysql.user;
-+-----------+------------------+-----------------------+
-| host      | user             | plugin                |
-+-----------+------------------+-----------------------+
-| %         | monitor          | caching_sha2_password |
-| %         | puser            | mysql_native_password |
-| %         | root             | caching_sha2_password |
-| %         | testuser         | mysql_native_password |
-| localhost | mysql.infoschema | caching_sha2_password |
-| localhost | mysql.session    | caching_sha2_password |
-| localhost | mysql.sys        | caching_sha2_password |
-| localhost | root             | caching_sha2_password |
-+-----------+------------------+-----------------------+
-8 rows in set (0.00 sec)
-```
-
-plugin 수정하기
-```bash 
-# master 
-mysql> alter user 'puser'@'%' identified with mysql_native_password by '1234';
-mysql> grant all on *.* to 'puser'@'%';
-mysql> flush privileges;
-```
-reconnect client to proxysql
+##### reconnect client to proxysql
 ```bash
 $ docker compose exec -it master mysql -u puser -p -P 6033 -h proxy -e 'select @@hostname';
 ```
-
 
 ### query rules
 #### 현재 query rule 확인하기 
