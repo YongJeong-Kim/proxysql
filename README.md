@@ -45,6 +45,7 @@ add server
 MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (0, 'master', 3306);
 MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (1, 'slave1', 3306);
 MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (1, 'slave2', 3306); 
+MySQL [admin]> INSERT INTO mysql_servers(hostgroup_id, hostname, port) VALUES (1, 'slave3', 3306); 
 ```
 
 show server list
@@ -84,7 +85,7 @@ MySQL [admin]> SAVE MYSQL VARIABLES TO DISK;
 모니터링 계정을 생성하여 서버 상태를 체크할 수 있다.
 ```bash 
 # master
-mysql> create user 'monitor'@'%' identified by 'monitor';
+mysql> create user 'puser'@'%' identified by '1234';
 ```
 
 general log 설정
@@ -145,30 +146,34 @@ mysql> select * from mysql.general_log;
 클라이언트(웹서버 등)에서 proxysql로 접속하기 위한 유저 등록하기 
 ```bash 
 # master 
-mysql> SELECT host, user, authentication_string FROM mysql.user;
-+-----------+------------------+----[README.md](..%2Freplication%2FREADME.md)--------------------------------------------------------------------+
-| host      | user             | authentication_string                                                  |
-+-----------+------------------+------------------------------------------------------------------------+
-| %         | monitor          | $A$005$+[README.md](..%2Freplication%2FREADME.md)1[cGAq0\GY
-                                                   W)5JIQDFF8UWYIutAbW/BGEbYahXhJdnnyg0tcb3sEJqNoL15 |
-| %         | root             | $A$005$u_\VVSOls<r>1<m{wZu6XyMZ7Acqq9Rs910foFplP1Zxiyf9.R0GIghHAh7 |
-| %         | testuser         | *A4B6157319038724E3560894F7F932C8886EBFCF                              |
-| localhost | mysql.infoschema | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
-| localhost | mysql.session    | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
-| localhost | mysql.sys        | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
-| localhost | root             | $A$005$]CSHZ:jvj%Kkd␦lA36THm8QrXnrcluGzeRpmHuxsmq1nDIkO3vCwGkWm4lPB |
-+-----------+------------------+------------------------------------------------------------------------+
+mysql> select host, user, plugin, authentication_string from mysql.user;
++-----------+------------------+-----------------------+------------------------------------------------------------------------+
+| host      | user             | plugin                | authentication_string                                                  |
++-----------+------------------+-----------------------+------------------------------------------------------------------------+
+| %         | puser            | caching_sha2_password | $A$005$+SW=/ZYsUK!?
+                                                                            >xVpv/2V2CVqlydcaJC1WPQQ2qoBsUXWZ9K1ORuGMrR9I0 |
+| %         | root             | caching_sha2_password | $A$005$Hf/c:fuu{U      *%je    iPILX4pAe5VBQHJxqLYcLlulZn6Awxr/sV2Q3Ua8GzOXfB |
+| %         | testuser         | mysql_native_password | *A4B6157319038724E3560894F7F932C8886EBFCF                              |
+| localhost | mysql.infoschema | caching_sha2_password | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
+| localhost | mysql.session    | caching_sha2_password | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
+| localhost | mysql.sys        | caching_sha2_password | $A$005$THISISACOMBINATIONOFINVALIDSALTANDPASSWORDTHATMUSTNEVERBRBEUSED |
+| localhost | root             | caching_sha2_password | $A$005$GkZ
+%Fo%6JOscbmNcK1fWpKS4Xf2n4GJlhRHBConhPEzTa8ZRN7 |                 &=sV
++-----------+------------------+-----------------------+------------------------------------------------------------------------+
 7 rows in set (0.00 sec)
 ```
 
-만들었던 testuser를 등록한다.
-`Warning! 새로운 유저를 만드는 것이 좋다`
+만들었던 puser를(수정했던 monitor 유저) 등록한다.
 ```bash 
 # proxysql
 MySQL [admin]> SELECT * FROM mysql_users;
 Empty set (0.000 sec)
-INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('ubuntu', '123456', 0);
-MySQL [admin]> INSERT INTO mysql_users(username, password) VALUES ('testuser', '*A4B6157319038724E3560894F7F932C8886EBFCF');
+# 만약 select host, user, plugin, authentication_string from mysql.user;
+# 에서 plugin 값이 caching_sha2_password 이라면 password 컬럼에 password 그대로 입력하자
+# MySQL [admin]> INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('puser', '1234', 0);
+
+# mysql_native_password 이라면 password 컬럼에 authentication_string 값을 입력하자
+MySQL [admin]> INSERT INTO mysql_users (username, password, default_hostgroup) VALUES ('puser', '*A4B6157319038724E3560894F7F932C8886EBFCF', 0);
 Query OK, 1 row affected (0.000 sec)
 
 MySQL [admin]> LOAD MYSQL USERS TO RUNTIME;
@@ -176,6 +181,13 @@ Query OK, 0 rows affected (0.002 sec)
 
 MySQL [admin]> SAVE MYSQL USERS TO DISK;
 Query OK, 0 rows affected (0.030 sec)
+```
+
+새로운(puser) 유저 권한부여
+```bash 
+# master
+mysql> grant all on *.* to 'puser'@'%';
+mysql> flush privileges;
 ```
 
 connect client to proxysql
@@ -253,7 +265,20 @@ MySQL [admin]> SAVE MYSQL QUERY RULES TO DISK;
 Query OK, 0 rows affected (0.030 sec)
 ```
 
-master general log
+connect proxy client 
+```bash 
+$ docker compose exec -it master mysql -u puser -p -P 6033 -h proxy
+```
+
+```bash 
+mysql> create database aaa;
+mysql> create table user(id int auto_increment primary key);
+
+mysql> insert into user values(); # master
+mysql> select * from user; # slaves
+```
+
+show general log
 ```bash 
 # master log_output -> FILE
 mysql> show variables like '%general%';
@@ -269,10 +294,19 @@ $ docker compose exec -it master bash
 bash-4.4# tail -f /var/lib/mysql/f83b85cbf27c.log
 ```
 
-slave general log
-```bash 
+master general log(insert, update, delete)
+![image](https://github.com/YongJeong-Kim/go/assets/30817924/c8eb59d0-5060-479c-84af-b524f0e680ff)
+![image](https://github.com/YongJeong-Kim/go/assets/30817924/78b65cf9-e982-4e3b-8254-74d003248441)
 
-```
+
+slave general log(select 3 times)
+
+2 times slave3
+![image](https://github.com/YongJeong-Kim/go/assets/30817924/019c1ac1-5c71-4fe2-8434-2fd8c3eaf067)
+
+1 time slave2
+![image](https://github.com/YongJeong-Kim/go/assets/30817924/5c6ba6bb-b2bc-4301-b91b-7154b0c815c2)
+
 
 backup config
 ```bash
